@@ -1,0 +1,447 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Sparkles, Trophy, Users, RefreshCw, Volume2, VolumeX, Music } from 'lucide-react';
+
+/**
+ * --- 音效素材配置 ---
+ * 如果你有本地文件，请替换下方的 URL。
+ * 这里使用网络上的开源免版权音效作为示例。
+ */
+const AUDIO_ASSETS = {
+  // 背景音乐：欢快喜庆的循环音乐
+  bgm: "https://cdn.pixabay.com/audio/2023/01/01/audio_82319f6a70.mp3", 
+  // 滚动音效：快速的鼓点或机械声
+  roll: "https://cdn.pixabay.com/audio/2022/03/10/audio_cda642337a.mp3", 
+  // 中奖音效：欢呼+烟花
+  win: "https://cdn.pixabay.com/audio/2021/08/04/audio_0625c1539c.mp3" 
+};
+
+/**
+ * 模拟村内名单数据
+ */
+const INITIAL_CANDIDATES = [
+  "张三叔", "李大婶", "王二麻子", "赵村长", "刘会计", "陈大爷", "小芳", "建国",
+  "翠花", "阿强", "秀英", "大军", "春梅", "志强", "玉兰", "伟业",
+  "红霞", "富贵", "吉祥", "如意", "东东", "丽丽", "宝国", "和平",
+  "金凤", "银龙", "喜子", "乐乐", "旺财", "福根", "桂英", "茂才",
+  "胜男", "国庆", "秋菊", "冬梅", "阿伟", "小明", "大山", "石头"
+];
+
+// 粒子系统配置
+const PARTICLE_COUNT = 150;
+const FRICTION = 0.98;
+
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  color: string;
+  alpha: number;
+  size: number;
+}
+
+export default function App() {
+  // --- 状态管理 ---
+  const [hasStarted, setHasStarted] = useState(false); // 是否已进入主界面（用于解锁音频）
+  const [isMuted, setIsMuted] = useState(false);
+  
+  const [candidates, setCandidates] = useState<string[]>(INITIAL_CANDIDATES);
+  const [round, setRound] = useState<1 | 2 | 3>(1); 
+  const [winners, setWinners] = useState<{ round1: string[]; round2: string[] }>({ round1: [], round2: [] });
+  const [isRolling, setIsRolling] = useState(false);
+  const [displayNames, setDisplayNames] = useState<string[]>(["?", "?", "?", "?"]);
+  const [showExplosion, setShowExplosion] = useState(false);
+  
+  // --- 音频 Ref ---
+  const bgmRef = useRef<HTMLAudioElement | null>(null);
+  const rollRef = useRef<HTMLAudioElement | null>(null);
+  const winRef = useRef<HTMLAudioElement | null>(null);
+
+  // --- 定时器 Ref ---
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // --- 初始化音频 ---
+  useEffect(() => {
+    bgmRef.current = new Audio(AUDIO_ASSETS.bgm);
+    bgmRef.current.loop = true;
+    bgmRef.current.volume = 0.4; // 背景音稍微小一点
+
+    rollRef.current = new Audio(AUDIO_ASSETS.roll);
+    rollRef.current.loop = true; // 滚动音效循环
+    rollRef.current.volume = 0.8;
+
+    winRef.current = new Audio(AUDIO_ASSETS.win);
+    winRef.current.volume = 1.0;
+
+    return () => {
+      // 清理
+      if (bgmRef.current) { bgmRef.current.pause(); bgmRef.current = null; }
+      if (rollRef.current) { rollRef.current.pause(); rollRef.current = null; }
+      if (winRef.current) { winRef.current.pause(); winRef.current = null; }
+    };
+  }, []);
+
+  // --- 音频控制逻辑 ---
+  const toggleMute = () => {
+    setIsMuted(!isMuted);
+    if (bgmRef.current) bgmRef.current.muted = !isMuted;
+    if (rollRef.current) rollRef.current.muted = !isMuted;
+    if (winRef.current) winRef.current.muted = !isMuted;
+  };
+
+  const enterApp = () => {
+    setHasStarted(true);
+    // 用户交互后，开始播放 BGM
+    if (bgmRef.current && !isMuted) {
+      bgmRef.current.play().catch(e => console.log("Audio play failed", e));
+    }
+  };
+
+  // --- 抽奖逻辑 ---
+  const startLottery = () => {
+    if (round > 2 || candidates.length < 4) return;
+    
+    setIsRolling(true);
+    setShowExplosion(false);
+
+    // 播放滚动音效
+    if (rollRef.current && !isMuted) {
+      rollRef.current.currentTime = 0;
+      rollRef.current.play();
+    }
+    
+    // 降低 BGM 音量给音效让路
+    if (bgmRef.current) bgmRef.current.volume = 0.2;
+
+    // 1. 快速滚动名字
+    intervalRef.current = setInterval(() => {
+      const randomNames = [];
+      for (let i = 0; i < 4; i++) {
+        const randomIdx = Math.floor(Math.random() * candidates.length);
+        randomNames.push(candidates[randomIdx]);
+      }
+      setDisplayNames(randomNames);
+    }, 60); // 速度加快
+
+    // 2. 自动停止机制 (5秒后)
+    const ROLL_DURATION = 5000; 
+    
+    timeoutRef.current = setTimeout(() => {
+      stopLottery();
+    }, ROLL_DURATION);
+  };
+
+  const stopLottery = () => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    
+    // 停止滚动音效
+    if (rollRef.current) {
+      rollRef.current.pause();
+      rollRef.current.currentTime = 0;
+    }
+
+    // 播放欢呼音效
+    if (winRef.current && !isMuted) {
+      winRef.current.currentTime = 0;
+      winRef.current.play();
+    }
+
+    // 恢复 BGM 音量
+    if (bgmRef.current && !isMuted) bgmRef.current.volume = 0.4;
+    
+    // 抽奖计算
+    const currentPool = [...candidates];
+    const newWinners: string[] = [];
+    
+    for (let i = 0; i < 4; i++) {
+      if (currentPool.length === 0) break;
+      const winnerIndex = Math.floor(Math.random() * currentPool.length);
+      newWinners.push(currentPool[winnerIndex]);
+      currentPool.splice(winnerIndex, 1);
+    }
+
+    setDisplayNames(newWinners);
+    setCandidates(currentPool);
+    setIsRolling(false);
+    setShowExplosion(true);
+    triggerFireworks(); 
+
+    setWinners(prev => {
+      const newState = { ...prev };
+      if (round === 1) newState.round1 = newWinners;
+      else newState.round2 = newWinners;
+      return newState;
+    });
+
+    setTimeout(() => {
+        setRound(prev => (prev === 1 ? 2 : 3) as 1 | 2 | 3);
+    }, 2000);
+  };
+
+  const resetLottery = () => {
+    setCandidates(INITIAL_CANDIDATES);
+    setRound(1);
+    setWinners({ round1: [], round2: [] });
+    setDisplayNames(["?", "?", "?", "?"]);
+    setShowExplosion(false);
+    setIsRolling(false);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    // 重置时不停止 BGM，但停止其他音效
+    if (rollRef.current) rollRef.current.pause();
+    if (winRef.current) winRef.current.pause();
+  };
+
+  // --- 特效逻辑 ---
+  const triggerFireworks = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let particles: Particle[] = [];
+    const colors = ['#FFD700', '#FFFFFF', '#FFA500', '#FF4500'];
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      particles.push({
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        vx: (Math.random() - 0.5) * 20, // 爆炸范围更大
+        vy: (Math.random() - 0.5) * 20,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        alpha: 1,
+        size: Math.random() * 6 + 2
+      });
+    }
+
+    const animate = () => {
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      let activeParticles = false;
+
+      particles.forEach(p => {
+        if (p.alpha > 0) {
+          p.x += p.vx;
+          p.y += p.vy;
+          p.vy += 0.2;
+          p.vx *= FRICTION;
+          p.vy *= FRICTION;
+          p.alpha -= 0.015;
+          p.size *= 0.96;
+
+          ctx.globalAlpha = p.alpha;
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+          activeParticles = true;
+        }
+      });
+
+      if (activeParticles) {
+        requestAnimationFrame(animate);
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    };
+    animate();
+  }, []);
+
+  // --- 欢迎界面 (用于激活音频上下文) ---
+  if (!hasStarted) {
+    return (
+      <div className="min-h-screen bg-[#b91c1c] flex items-center justify-center p-4">
+        <button 
+          onClick={enterApp}
+          className="bg-[#FCD34D] text-[#b91c1c] w-full max-w-sm aspect-[9/16] rounded-xl flex flex-col items-center justify-center gap-6 shadow-2xl border-4 border-[#F59E0B] hover:scale-105 transition-transform animate-pulse-slow"
+        >
+          <div className="text-6xl">🐎</div>
+          <div className="text-3xl font-bold tracking-widest text-center">
+            点击开启<br/>村晚大抽奖
+          </div>
+          <div className="flex items-center gap-2 text-sm font-bold opacity-80">
+            <Music size={20} /> 开启喜庆音效
+          </div>
+        </button>
+      </div>
+    );
+  }
+
+  // --- 主界面 ---
+  return (
+    <div className="min-h-screen bg-black flex items-center justify-center font-sans overflow-hidden">
+      <div 
+        className="relative w-full h-full max-w-[450px] aspect-[9/16] bg-[#FF3B30] shadow-2xl overflow-hidden flex flex-col"
+        style={{ maxHeight: '100vh' }}
+      >
+        {/* 音效开关 */}
+        <button 
+          onClick={toggleMute}
+          className="absolute top-4 right-4 z-50 p-2 bg-black/20 rounded-full text-white/80 hover:bg-black/40 transition-colors"
+        >
+          {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+        </button>
+
+        {/* 背景纹理 */}
+        <div className="absolute inset-0 opacity-10 pointer-events-none" 
+             style={{ 
+               backgroundImage: 'radial-gradient(circle, #ffeb3b 2px, transparent 2.5px)', 
+               backgroundSize: '30px 30px' 
+             }}>
+        </div>
+        <div className="w-full h-32 bg-gradient-to-b from-[#7f1d1d] to-transparent absolute top-0 z-0"></div>
+        
+        {/* 内容区域 */}
+        <div className="relative z-10 flex-1 flex flex-col p-6 items-center">
+          
+          <div className="mt-8 mb-4 text-center animate-bounce-slow">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <span className="text-4xl">🐎</span>
+              <h1 className="text-3xl font-bold text-[#FCD34D] drop-shadow-md tracking-widest">
+                金马迎春
+              </h1>
+              <span className="text-4xl">🐎</span>
+            </div>
+            <p className="text-white/90 text-sm font-medium tracking-widest uppercase opacity-80">
+              村内年夜饭大抽奖
+            </p>
+          </div>
+
+          <div className="mb-4 bg-[#b91c1c] px-6 py-2 rounded-full border border-[#FCD34D]/30 shadow-inner min-w-[200px] text-center">
+            <span className="text-[#FCD34D] font-bold text-lg">
+              {round === 1 ? "第一轮：幸运奖 (4名)" : round === 2 ? "第二轮：压轴奖 (4名)" : "抽奖已结束"}
+            </span>
+          </div>
+
+          {/* 滚动区 */}
+          <div className="w-full bg-white/10 backdrop-blur-sm rounded-2xl p-4 border-2 border-[#FCD34D]/50 shadow-lg mb-6">
+            <div className="grid grid-cols-2 gap-4">
+              {displayNames.map((name, idx) => (
+                <div 
+                  key={idx} 
+                  className={`
+                    h-20 flex items-center justify-center rounded-xl text-xl font-bold shadow-md transition-all duration-300 overflow-hidden
+                    ${showExplosion 
+                      ? 'bg-gradient-to-br from-[#FCD34D] to-[#F59E0B] text-[#b91c1c] scale-105 border-2 border-white transform' 
+                      : 'bg-[#b91c1c] text-white border border-white/20'
+                    }
+                  `}
+                >
+                  <span className="truncate px-1">{name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 按钮区 */}
+          <div className="mt-auto mb-8 w-full flex flex-col items-center gap-4">
+            {round < 3 ? (
+              <button
+                onClick={startLottery}
+                disabled={isRolling}
+                className={`
+                  w-full py-5 rounded-full text-2xl font-black tracking-widest shadow-xl transition-all transform active:scale-95
+                  ${isRolling 
+                    ? 'bg-gray-400 text-gray-200 cursor-not-allowed' 
+                    : 'bg-gradient-to-r from-[#FCD34D] to-[#F59E0B] text-[#b91c1c] hover:brightness-110 animate-pulse-slow ring-4 ring-[#FCD34D]/30'
+                  }
+                `}
+              >
+                {isRolling ? "正在洗牌..." : "开始抽奖"}
+              </button>
+            ) : (
+              <div className="text-white text-center text-xl font-bold animate-pulse">
+                🎉 恭喜所有中奖者！ 🎉
+              </div>
+            )}
+
+            <button 
+              onClick={resetLottery}
+              className="text-white/50 text-xs flex items-center gap-1 hover:text-white transition-colors mt-2"
+            >
+              <RefreshCw size={12} /> 重置所有数据
+            </button>
+          </div>
+
+          {/* 底部榜单 */}
+          <div className="w-full bg-black/20 rounded-xl p-4 mt-2 mb-4 border border-white/10 flex-1 overflow-y-auto min-h-[120px]">
+            <h3 className="text-[#FCD34D] text-xs font-bold mb-2 flex items-center gap-1 uppercase tracking-wider border-b border-white/10 pb-1">
+              <Trophy size={12} /> 荣誉榜单
+            </h3>
+            
+            <div className="space-y-3">
+              {winners.round1.length > 0 && (
+                <div>
+                  <div className="text-white/60 text-[10px] mb-1">第一轮中奖名单</div>
+                  <div className="flex flex-wrap gap-2">
+                    {winners.round1.map((name, i) => (
+                      <span key={i} className="bg-[#991b1b] text-white text-xs px-2 py-1 rounded shadow-sm border border-white/10">
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {winners.round2.length > 0 && (
+                <div>
+                  <div className="text-white/60 text-[10px] mb-1">第二轮中奖名单</div>
+                  <div className="flex flex-wrap gap-2">
+                    {winners.round2.map((name, i) => (
+                      <span key={i} className="bg-gradient-to-r from-[#FCD34D] to-[#F59E0B] text-[#b91c1c] text-xs px-2 py-1 rounded shadow-sm font-bold">
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+               {winners.round1.length === 0 && winners.round2.length === 0 && (
+                 <div className="text-white/30 text-xs text-center py-4 italic">
+                    好运即将降临...
+                 </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+
+        {/* 底部山纹装饰 */}
+        <div className="absolute bottom-0 w-full h-16 pointer-events-none">
+           <svg viewBox="0 0 1440 320" className="absolute bottom-0 w-[200%] h-full fill-[#991b1b] opacity-80 left-[-50%]">
+              <path fillOpacity="1" d="M0,160L48,176C96,192,192,224,288,224C384,224,480,192,576,165.3C672,139,768,117,864,128C960,139,1056,181,1152,197.3C1248,213,1344,203,1392,197.3L1440,192L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"></path>
+           </svg>
+        </div>
+
+        {/* 烟花 Canvas */}
+        <canvas 
+          ref={canvasRef} 
+          className="absolute inset-0 pointer-events-none z-50"
+          style={{ width: '100%', height: '100%' }}
+        />
+      </div>
+      
+      <style jsx global>{`
+        @keyframes pulse-slow {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.02); opacity: 0.95; }
+        }
+        .animate-pulse-slow {
+          animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes bounce-slow {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-5px); }
+        }
+        .animate-bounce-slow {
+          animation: bounce-slow 3s infinite;
+        }
+      `}</style>
+    </div>
+  );
+}
